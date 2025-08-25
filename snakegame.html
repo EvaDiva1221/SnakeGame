@@ -1,0 +1,405 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html>
+<head>
+  <title>Google Snake Game</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
+  <style>
+    body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #111; }
+    canvas { border: 4px solid #444; box-shadow: 0 0 20px rgba(0, 0, 0, 0.5); }
+  </style>
+</head>
+<body>
+<script>
+let snake = [];
+let foods = [];
+let chiliPeppers = [];
+let direction = 'RIGHT';
+let nextDirection = 'RIGHT';
+let gridSize = 20;
+let cols, rows;
+let gameState = 'PLAYING'; // PLAYING, GAME_OVER, WON
+let snakeColors = ['#FF3333', '#FFCC00', '#33FF33', '#33CCFF', '#CC33FF'];
+let skittleColors = ['#E30613', '#F28C38', '#FFEF00', '#00FF00', '#A100A1'];
+let frameCount = 0;
+let moveTimer = 0;
+let baseMoveInterval = 0.1; // Base time (in seconds) per grid move
+let moveInterval = baseMoveInterval; // Current move interval
+let speedBoostTimer = 0; // Tracks duration of speed boost
+const speedBoostDuration = 5.5; // Speed boost lasts 5.5 seconds
+let targetScore = 100; // Goal: reach a score of 100
+let skittlesEaten = 0; // Track regular Skittles eaten
+let gameTimer = 0; // Tracks game duration in seconds
+let gradients = [];
+
+function setup() {
+  createCanvas(600, 400);
+  cols = width / gridSize;
+  rows = height / gridSize;
+  frameRate(60); // High frame rate for smooth rendering
+  
+  // Pre-create gradients for each color
+  for (let col of snakeColors) {
+    let baseColor = color(col);
+    let highlightColor = lerpColor(baseColor, color(255, 255, 255), 0.3);
+    let grad = createGraphics(gridSize, gridSize);
+    grad.noStroke();
+    for (let y = 0; y < gridSize; y++) {
+      let inter = map(y, 0, gridSize, 0, 1);
+      grad.fill(lerpColor(baseColor, highlightColor, inter));
+      grad.rect(0, y, gridSize, 1);
+    }
+    gradients.push(grad);
+  }
+  
+  snake = [{ x: floor(cols / 2), y: floor(rows / 2) }];
+  // Initialize 5 regular foods
+  for (let i = 0; i < 5; i++) {
+    spawnRegularFood();
+  }
+}
+
+function spawnRegularFood() {
+  let newFood = {
+    x: floor(random(cols)),
+    y: floor(random(rows)),
+    color: random(skittleColors)
+  };
+  // Check for collisions with snake, other foods, and chili peppers
+  for (let segment of snake) {
+    if (newFood.x === segment.x && newFood.y === segment.y) {
+      return spawnRegularFood();
+    }
+  }
+  for (let f of foods) {
+    if (newFood.x === f.x && newFood.y === f.y) {
+      return spawnRegularFood();
+    }
+  }
+  for (let p of chiliPeppers) {
+    if ((newFood.x === p.x || newFood.x === p.x + 1) && newFood.y === p.y) {
+      return spawnRegularFood();
+    }
+  }
+  foods.push(newFood);
+}
+
+function spawnChiliPepper() {
+  let newPepper = {
+    x: floor(random(cols - 1)), // -1 to ensure 2x1 fits within canvas
+    y: floor(random(rows)),
+    color: '#FF0000' // Bright red for chili pepper
+  };
+  // Check for collisions with snake, regular foods, and other chili peppers
+  for (let segment of snake) {
+    if ((newPepper.x === segment.x || newPepper.x + 1 === segment.x) && newPepper.y === segment.y) {
+      return spawnChiliPepper();
+    }
+  }
+  for (let f of foods) {
+    if ((newPepper.x === f.x || newPepper.x + 1 === f.x) && newPepper.y === f.y) {
+      return spawnChiliPepper();
+    }
+  }
+  for (let p of chiliPeppers) {
+    if ((newPepper.x === p.x || newPepper.x === p.x + 1 || newPepper.x + 1 === p.x || newPepper.x + 1 === p.x + 1) && newPepper.y === p.y) {
+      return spawnChiliPepper();
+    }
+  }
+  chiliPeppers.push(newPepper);
+}
+
+function draw() {
+  // Gradient background
+  let c1 = color(20, 20, 50);
+  let c2 = color(50, 50, 80);
+  for (let y = 0; y < height; y++) {
+    let inter = map(y, 0, height, 0, 1);
+    let c = lerpColor(c1, c2, inter);
+    stroke(c);
+    line(0, y, width, y);
+  }
+  
+  if (gameState === 'GAME_OVER') {
+    fill(255);
+    textSize(32);
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    text('Game Over!\nPress SPACE to restart', width / 2, height / 2);
+    return;
+  } else if (gameState === 'WON') {
+    fill(255);
+    textSize(32);
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    text('You Win!\nPress SPACE to restart', width / 2, height / 2);
+    return;
+  }
+  
+  // Update timers
+  if (gameState === 'PLAYING') {
+    gameTimer += deltaTime / 1000; // Increment game timer in seconds
+    if (speedBoostTimer > 0) {
+      speedBoostTimer -= deltaTime / 1000;
+      if (speedBoostTimer <= 0) {
+        moveInterval = baseMoveInterval; // Revert to normal speed
+      }
+    }
+  }
+  
+  // Update snake position
+  moveTimer += deltaTime / 1000; // Convert milliseconds to seconds
+  if (moveTimer >= moveInterval) {
+    direction = nextDirection;
+    let newHead = { x: snake[0].x, y: snake[0].y };
+    if (direction === 'UP') newHead.y--;
+    else if (direction === 'DOWN') newHead.y++;
+    else if (direction === 'LEFT') newHead.x--;
+    else if (direction === 'RIGHT') newHead.x++;
+    
+    // Check boundaries
+    if (newHead.x < 0 || newHead.x >= cols || newHead.y < 0 || newHead.y >= rows) {
+      gameState = 'GAME_OVER';
+      return;
+    }
+    
+    // Check self-collision
+    for (let i = 1; i < snake.length; i++) {
+      if (newHead.x === snake[i].x && newHead.y === snake[i].y) {
+        gameState = 'GAME_OVER';
+        return;
+      }
+    }
+    
+    // Check regular food collisions
+    let foodEatenIndex = -1;
+    for (let i = 0; i < foods.length; i++) {
+      if (newHead.x === foods[i].x && newHead.y === foods[i].y) {
+        foodEatenIndex = i;
+        break;
+      }
+    }
+    if (foodEatenIndex !== -1) {
+      snake.push({}); // Add new segment
+      foods.splice(foodEatenIndex, 1); // Remove eaten food
+      skittlesEaten++; // Increment Skittles eaten counter
+      // Spawn chili pepper every 15 Skittles
+      if (skittlesEaten >= 15) {
+        spawnChiliPepper();
+        skittlesEaten = 0;
+      }
+      // 20% chance to spawn chili pepper
+      if (random() < 0.2) {
+        spawnChiliPepper();
+      }
+      spawnRegularFood(); // Replace eaten food to maintain 5
+      // Check win condition
+      if (snake.length - 1 >= targetScore) {
+        gameState = 'WON';
+        return;
+      }
+    }
+    
+    // Check chili pepper collisions
+    let chiliEatenIndex = -1;
+    for (let i = 0; i < chiliPeppers.length; i++) {
+      if ((newHead.x === chiliPeppers[i].x || newHead.x === chiliPeppers[i].x + 1) && newHead.y === chiliPeppers[i].y) {
+        chiliEatenIndex = i;
+        break;
+      }
+    }
+    if (chiliEatenIndex !== -1) {
+      snake.push({}); // Add new segment
+      chiliPeppers.splice(chiliEatenIndex, 1); // Remove eaten chili
+      moveInterval = baseMoveInterval / 2; // Double speed
+      speedBoostTimer = speedBoostDuration; // Set boost duration to 5.5 seconds
+      // Check win condition
+      if (snake.length - 1 >= targetScore) {
+        gameState = 'WON';
+        return;
+      }
+    }
+    
+    // Update snake grid positions
+    snake.unshift(newHead);
+    if (foodEatenIndex === -1 && chiliEatenIndex === -1) {
+      snake.pop(); // Remove tail if no food eaten
+    }
+    moveTimer = 0;
+  }
+  
+  // Draw grid
+  stroke(80, 80, 100, 50);
+  strokeWeight(1);
+  for (let x = 0; x <= width; x += gridSize) {
+    line(x, 0, x, height);
+  }
+  for (let y = 0; y <= height; y += gridSize) {
+    line(0, y, width, y);
+  }
+  
+  // Draw regular foods (Skittles-like)
+  for (let f of foods) {
+    noStroke();
+    fill(f.color);
+    ellipse(f.x * gridSize + gridSize / 2, f.y * gridSize + gridSize / 2, gridSize * 0.7);
+    fill(255, 255, 255, 100);
+    ellipse(f.x * gridSize + gridSize / 2 - 3, f.y * gridSize + gridSize / 2 - 3, gridSize * 0.2);
+    fill(255);
+    textSize(gridSize * 0.4);
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    text('S', f.x * gridSize + gridSize / 2, f.y * gridSize + gridSize / 2 + 2);
+  }
+  
+  // Draw chili peppers (2x1 grid, red with green stem)
+  for (let p of chiliPeppers) {
+    noStroke();
+    fill(p.color);
+    // Draw pepper body (2x1 grid)
+    rect(p.x * gridSize, p.y * gridSize, gridSize * 2, gridSize, 5);
+    // Shine effect
+    fill(255, 255, 255, 100);
+    ellipse(p.x * gridSize + gridSize * 0.5, p.y * gridSize + gridSize * 0.5, gridSize * 0.3);
+    // Green stem
+    fill('#00FF00');
+    beginShape();
+    vertex(p.x * gridSize + gridSize * 1.8, p.y * gridSize + gridSize * 0.2);
+    quadraticVertex(p.x * gridSize + gridSize * 2, p.y * gridSize, 
+                   p.x * gridSize + gridSize * 2.2, p.y * gridSize + gridSize * 0.3);
+    quadraticVertex(p.x * gridSize + gridSize * 2, p.y * gridSize + gridSize * 0.4, 
+                   p.x * gridSize + gridSize * 1.8, p.y * gridSize + gridSize * 0.2);
+    endShape(CLOSE);
+  }
+  
+  // Draw snake
+  for (let i = 0; i < snake.length; i++) {
+    // Colorful segments with pre-created gradient
+    let grad = gradients[i % snakeColors.length];
+    
+    // Draw segment with shadow
+    push();
+    translate(snake[i].x * gridSize, snake[i].y * gridSize);
+    let offset = sin(frameCount * 0.04 + i * 0.2) * 0.5; // Smaller, smoother wiggle
+    drawingContext.shadowBlur = 5;
+    drawingContext.shadowColor = 'rgba(0, 0, 0, 0.3)';
+    image(grad, 0, offset, gridSize, gridSize);
+    
+    // Scale pattern
+    noStroke();
+    fill(255, 255, 255, 80);
+    for (let s = 0; s < 3; s++) {
+      let scaleX = gridSize * (0.25 + s * 0.25);
+      ellipse(scaleX, offset + gridSize / 2, gridSize * 0.4, gridSize * 0.3);
+    }
+    
+    // Head enhancements
+    if (i === 0) {
+      // Reduced pulsing glow
+      let glowSize = gridSize * 1.2 + sin(frameCount * 0.05) * 1;
+      noStroke();
+      fill(255, 255, 255, 50);
+      drawingContext.shadowBlur = 10;
+      drawingContext.shadowColor = 'rgba(255, 255, 255, 0.5)';
+      ellipse(gridSize / 2, gridSize / 2 + offset, glowSize);
+      
+      // Expressive eyes
+      fill(0);
+      ellipse(gridSize * 0.35, gridSize * 0.35 + offset, gridSize * 0.25);
+      ellipse(gridSize * 0.65, gridSize * 0.35 + offset, gridSize * 0.25);
+      fill(255);
+      ellipse(gridSize * 0.35, gridSize * 0.3 + offset, gridSize * 0.1);
+      ellipse(gridSize * 0.65, gridSize * 0.3 + offset, gridSize * 0.1);
+      
+      // Achievement add-on: Crown when score >= 100
+      let score = snake.length - 1;
+      if (score >= 100) {
+        fill('#FFD700'); // Gold crown
+        noStroke();
+        rect(gridSize * 0.3, offset - gridSize * 0.2, gridSize * 0.4, gridSize * 0.1); // Base
+        triangle(gridSize * 0.3, offset - gridSize * 0.2, gridSize * 0.4, offset - gridSize * 0.4, gridSize * 0.5, offset - gridSize * 0.2);
+        triangle(gridSize * 0.4, offset - gridSize * 0.2, gridSize * 0.5, offset - gridSize * 0.4, gridSize * 0.6, offset - gridSize * 0.2);
+        triangle(gridSize * 0.5, offset - gridSize * 0.2, gridSize * 0.6, offset - gridSize * 0.4, gridSize * 0.7, offset - gridSize * 0.2);
+      }
+    }
+    pop();
+  }
+  
+  // Draw score and timer
+  fill(255);
+  textSize(16);
+  textAlign(LEFT);
+  textStyle(NORMAL);
+  text(`Score: ${snake.length - 1}/${targetScore} Time: ${floor(gameTimer)}s`, 10, 20);
+  
+  frameCount++;
+}
+
+function keyPressed() {
+  if ((gameState === 'GAME_OVER' || gameState === 'WON') && keyCode === 32) { // SPACE to restart
+    snake = [{ x: floor(cols / 2), y: floor(rows / 2) }];
+    direction = 'RIGHT';
+    nextDirection = 'RIGHT';
+    gameState = 'PLAYING';
+    moveTimer = 0;
+    moveInterval = baseMoveInterval;
+    speedBoostTimer = 0;
+    skittlesEaten = 0;
+    gameTimer = 0; // Reset timer
+    foods = [];
+    chiliPeppers = [];
+    for (let i = 0; i < 5; i++) {
+      spawnRegularFood();
+    }
+  }
+  if (keyCode === UP_ARROW && direction !== 'DOWN') {
+    nextDirection = 'UP';
+  } else if (keyCode === DOWN_ARROW && direction !== 'UP') {
+    nextDirection = 'DOWN';
+  } else if (keyCode === LEFT_ARROW && direction !== 'RIGHT') {
+    nextDirection = 'LEFT';
+  } else if (keyCode === RIGHT_ARROW && direction !== 'LEFT') {
+    nextDirection = 'RIGHT';
+  }
+}
+</script>
+</body>
+</html>
